@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
-	"github.com/orangbus/m3u8/dl"
 	"io"
 	"log"
 	"os"
@@ -12,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ferranbt/m3u8/dl"
 )
 
 var (
