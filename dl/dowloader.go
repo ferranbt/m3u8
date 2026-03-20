@@ -3,7 +3,7 @@ package dl
 import (
 	"bufio"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -17,7 +17,6 @@ import (
 const (
 	tsExt            = ".ts"
 	tsFolderName     = "ts"
-	mergeTSFilename  = "main.ts"
 	tsTempFileSuffix = "_tmp"
 	progressWidth    = 40
 )
@@ -30,11 +29,36 @@ type Downloader struct {
 	finish   int32
 	segLen   int
 
-	result *parse.Result
+	result         *parse.Result
+	progressUpdate ProgressUpdate
+}
+
+type ProgressUpdate interface {
+	Update(stage string, segLen int, finished int)
+}
+
+type ConfigOpt func(c *Downloader)
+
+func WithProgressUpdate(p ProgressUpdate) ConfigOpt {
+	return func(c *Downloader) {
+		c.progressUpdate = p
+	}
+}
+
+type printProgressUpdate struct {
+}
+
+func (p *printProgressUpdate) Update(stage string, segLen int, finished int) {
+	switch stage {
+	case "merge":
+		tool.DrawProgressBar("merge", float32(finished)/float32(segLen), progressWidth)
+	case "downloading":
+		tool.DrawProgressBar("Downloading", float32(finished)/float32(segLen), progressWidth)
+	}
 }
 
 // NewTask returns a Task instance
-func NewTask(output string, url string) (*Downloader, error) {
+func NewTask(output string, url string, opts ...ConfigOpt) (*Downloader, error) {
 	result, err := parse.FromURL(url)
 	if err != nil {
 		return nil, err
@@ -58,9 +82,13 @@ func NewTask(output string, url string) (*Downloader, error) {
 		return nil, fmt.Errorf("create ts folder '[%s]' failed: %s", tsFolder, err.Error())
 	}
 	d := &Downloader{
-		folder:   folder,
-		tsFolder: tsFolder,
-		result:   result,
+		folder:         folder,
+		tsFolder:       tsFolder,
+		result:         result,
+		progressUpdate: &printProgressUpdate{},
+	}
+	for _, opt := range opts {
+		opt(d)
 	}
 	d.segLen = len(result.M3u8.Segments)
 	d.queue = genSlice(d.segLen)
@@ -116,7 +144,7 @@ func (d *Downloader) download(segIndex int) error {
 	if err != nil {
 		return fmt.Errorf("create file: %s, %s", tsFilename, err.Error())
 	}
-	bytes, err := ioutil.ReadAll(b)
+	bytes, err := io.ReadAll(b)
 	if err != nil {
 		return fmt.Errorf("read bytes: %s, %s", tsUrl, err.Error())
 	}
@@ -154,7 +182,7 @@ func (d *Downloader) download(segIndex int) error {
 	}
 	// Maybe it will be safer in this way...
 	atomic.AddInt32(&d.finish, 1)
-	tool.DrawProgressBar("Downloading", float32(d.finish)/float32(d.segLen), progressWidth)
+	d.progressUpdate.Update("downloading", d.segLen, int(d.finish))
 	//fmt.Printf("[download %6.2f%%] %s\n", float32(d.finish)/float32(d.segLen)*100, tsUrl)
 	return nil
 }
@@ -214,14 +242,13 @@ func (d *Downloader) merge(name string) error {
 	mergedCount := 0
 	for segIndex := 0; segIndex < d.segLen; segIndex++ {
 		tsFilename := tsFilename(segIndex)
-		bytes, err := ioutil.ReadFile(filepath.Join(d.tsFolder, tsFilename))
+		bytes, err := os.ReadFile(filepath.Join(d.tsFolder, tsFilename))
 		_, err = writer.Write(bytes)
 		if err != nil {
 			continue
 		}
 		mergedCount++
-		tool.DrawProgressBar("merge",
-			float32(mergedCount)/float32(d.segLen), progressWidth)
+		d.progressUpdate.Update("merge", d.segLen, mergedCount)
 	}
 	_ = writer.Flush()
 	// Remove `ts` folder
